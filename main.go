@@ -8,8 +8,8 @@ import (
 	_ "image/jpeg"
 	"log"
 
-	"github.com/gilphilbert/colorconvert" //color conversion
-	"github.com/gilphilbert/framebuffer"  //write image to fb0
+	"github.com/gilphilbert/gocolor" //color conversion
+	"github.com/gilphilbert/goframebuf"  //write image to fb0
 	"github.com/graarh/golang-socketio/transport"
 
 	//if the input is jpeg
