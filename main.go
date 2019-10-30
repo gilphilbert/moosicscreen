@@ -6,30 +6,106 @@ import (
 	"image/color" //color
 	"image/draw"  //draw
 	_ "image/jpeg"
-	"log"
-
-	"github.com/gilphilbert/gocolor" //color conversion
-	"github.com/gilphilbert/goframebuf"  //write image to fb0
-	"github.com/graarh/golang-socketio/transport"
-
-	//if the input is jpeg
-	_ "image/png" //if the input is png
-
+	_ "image/png"
 	"io/ioutil" //decode fonts
-	"net/http"  //get image from url
-	"os"        //get user
+	"log"
+	"math"
+	"math/rand"
+	"net/http" //get image from url
+	"os"       //get user
+	"time"
 
-	"github.com/cenkalti/dominantcolor"            //find dominant color of image
-	"github.com/disintegration/imaging"            //image transformation
-	"github.com/golang/freetype"                   //import fonts
-	gosocketio "github.com/graarh/golang-socketio" //socketio server/client (for us, the client)
-	"golang.org/x/image/font"                      //font library for hinting
+	"github.com/cenkalti/dominantcolor" //find dominant color of image
+	"github.com/disintegration/imaging"
+
+	//image transformation
+	colorconvert "github.com/gilphilbert/gocolor"   //color conversion
+	framebuffer "github.com/gilphilbert/goframebuf" //write image to fb0
+	"github.com/golang/freetype"                    //import fonts
+	gosocketio "github.com/graarh/golang-socketio"  //socketio server/client (for us, the client)
+	"github.com/graarh/golang-socketio/transport"
+	"github.com/stianeikeland/go-rpio" //gpio management to turn backlight on/off
+	"golang.org/x/image/font"          //font library for hinting
 )
 
+//now we need to add GPIO and turn off the screen when we're not using it............
+
+//used to pass socketio data
+type Message struct {
+	Status     string `json:"status"`
+	Title      string `json:"title"`
+	Artist     string `json:"artist"`
+	Album      string `json:"album"`
+	Albumart   string `json:"albumart"`
+	TrackType  string `json:"trackType"`
+	Seek       int    `json:"seek"`
+	Duration   int    `json:"duration"`
+	SampleRate string `json:"samplerate"`
+	BitDepth   string `json:"bitdepth"`
+}
+
+//details of the screen
+type screen struct {
+	Width          int
+	Height         int
+	HPad           int
+	VPad           int
+	ProgressHeight int
+	ProgressTop    int
+	TitleSize      int
+	TextSize       int
+}
+
+//draw options (so we can choose what to send)
+type drawOpts struct {
+	Fb      *framebuffer.Framebuffer
+	Message Message
+	NewBase bool
+}
+
+//details of the current background image
+type builtImage struct {
+	image     *image.RGBA
+	base      color.RGBA
+	lighter   color.RGBA
+	lightness float64
+	color     color.RGBA
+}
+
+//variables (used for multiple threads)
 var (
-	fontFile = "sen.ttf"
-	textSize = 25
+	fontFile      = "sen.ttf"    //the font to use
+	ticking       = false        //whether the clock is ticking (increments playback)
+	display       = screen{}     //details of the display
+	baseImage     = builtImage{} //the current background image
+	playing       = Message{}    //current state
+	rpi           = false        //is this a raspberry pi?
+	backlight     = rpio.Pin(0)  //pin the backlight is attached to
+	screenTimeout = -1           //screen timeout, used to count down and turn screen off
+	connected     = false
 )
+
+/*
+converts an integer in milliseconds into a string formatted as [H:][M]M:SS
+*/
+func getTimeStringMilliseconds(tm int) string {
+	//move to top of progress bar and print seek time
+	seek := time.Duration(tm) * time.Millisecond
+	hours := int(math.Floor(seek.Hours()))
+	if hours > 0 {
+		seek = seek - (time.Duration(hours) * time.Hour)
+	}
+	minutes := int(math.Floor(seek.Minutes()))
+	if minutes > 0 {
+		seek = seek - (time.Duration(minutes) * time.Minute)
+	}
+	seconds := int(math.Floor(seek.Seconds()))
+	seekString := fmt.Sprintf("%d:%02d", minutes, seconds)
+	if hours > 0 {
+		seekString = fmt.Sprintf("%d:", hours) + seekString
+	}
+	return seekString
+}
 
 /*
 generates the alpha layer over the image. Right now, it only gradients top left to bottom right (1 at top left, 0 at bottom right)
@@ -62,18 +138,13 @@ func loadFont(surface draw.Image) *freetype.Context {
 	return c
 }
 
-func drawScreen(fb *framebuffer.Framebuffer) {
-	//hardcode some variables for now...
-	progress := 0.66
-	url := "https://musicrow.com/wp-content/uploads/2018/08/The-Eagles-Their-Greatest-Hits-vk-.jpg"
-
-	//set the dimensions of the screen from the framebuffer
-	disp_w := fb.Xres
-	disp_h := fb.Yres
-
-	//calculate padding values
-	padd_tb := int(float64(disp_h) * 0.15625)
-	padd_lr := int(float64(disp_w) * 0.0625)
+/*
+builds the base image from the albumart and generates the color palete
+needs an albumart url, sizes to the current screen (assumes horizontal)
+*/
+func buildBase(aaurl string) {
+	log.Println(aaurl)
+	url := "http://192.168.68.110:3000" + aaurl
 
 	//------ load albumart ------//
 
@@ -95,129 +166,174 @@ func drawScreen(fb *framebuffer.Framebuffer) {
 	}
 
 	//resize the image to the correct width and crop to the correct height (this ensures we get cover)
-	img = imaging.Resize(img, disp_w, 0, imaging.Lanczos)
-	img = imaging.CropAnchor(img, disp_w, disp_h, imaging.Center)
+	img = imaging.Resize(img, display.Width, 0, imaging.Lanczos)
+	img = imaging.CropAnchor(img, display.Width, display.Height, imaging.Center)
 
 	//------ define the colors we'll need ------//
 
 	//get the base color, this is the dominant color from the image. NOT the average color (which can be very different)
-	baseColor := dominantcolor.Find(img)
+	baseImage.base = dominantcolor.Find(img)
 	//get the lightness of the base color
-	baseLightness := colorconvert.Lightness(baseColor)
+	baseImage.lightness = colorconvert.Lightness(baseImage.base)
 	//generate a lighter version of the base color
-	lighterBase := colorconvert.LightenRGBA(baseColor, 40)
+	baseImage.lighter = colorconvert.LightenRGBA(baseImage.base, 40)
 	//color of anything we draw on the overlay will ne white...
-	overlayColor := color.RGBA{255, 255, 255, 255}
+	baseImage.color = color.RGBA{255, 255, 255, 255}
 	//unless the lightness is over 50%, in which case we'll use black
-	if baseLightness >= 127 {
-		overlayColor = color.RGBA{0, 0, 0, 0}
+	if baseImage.lightness >= 127 {
+		baseImage.color = color.RGBA{0, 0, 0, 0}
 	}
 
 	//------ build overlay ------//
 
 	//create overlay image
-	overlay := image.NewNRGBA(image.Rect(0, 0, disp_w, disp_h))
-	for x := 0; x < disp_w; x++ {
-		for y := 0; y < disp_h; y++ {
-			alpha := gradientAlpha(x, y, disp_w, disp_h)
-			c := color.NRGBA{baseColor.R, baseColor.G, baseColor.B, alpha}
+	overlay := image.NewNRGBA(image.Rect(0, 0, display.Width, display.Height))
+	//white := color.RGBA{0, 0, 0, 128}
+	//draw.Draw(overlay, overlay.Bounds(), &image.Uniform{white}, image.ZP, draw.Src)
+
+	for x := 0; x < display.Width; x++ {
+		for y := 0; y < display.Height; y++ {
+			alpha := gradientAlpha(x, y, display.Width, display.Height)
+			c := color.NRGBA{baseImage.base.R, baseImage.base.G, baseImage.base.B, alpha}
 			overlay.SetNRGBA(x, y, c)
 		}
 	}
 
-	//font definitions (sizes)
-	titleSize := int(float64(disp_h) * .1)
-	textSize := int(float64(disp_h) * .078125)
+	baseImage.image = image.NewRGBA(img.Bounds())
+	draw.Draw(baseImage.image, img.Bounds(), img, image.ZP, draw.Src)
 
-	//load the font
-	textWriter := loadFont(overlay)
-	//set the color for the overlay
-	textWriter.SetSrc(image.NewUniform(overlayColor))
-	//set our top-left position (based on screen padding)
-	pt := freetype.Pt(padd_lr, padd_tb)
+	//if the location is /albumart then we're seeing the default albumart which means the queue is empty
+	if aaurl != "/albumart" {
+		draw.DrawMask(baseImage.image, img.Bounds(), overlay, image.ZP, nil, image.ZP, draw.Over)
+	}
+}
 
-	//draw the title, set the size first
-	textWriter.SetFontSize(float64(titleSize))
-	//the ndraw the title
-	textWriter.DrawString("One Of These Nights", pt)
+/*
+creates the total image, including the background (buildBase) and text/drawings on it combined
+and writes it to the framebuffer provided
+*/
+func drawScreen(o drawOpts) {
+	data := o.Message
+	fb := o.Fb
 
-	//set the font size for the rest of the text
-	textWriter.SetFontSize(float64(textSize))
+	overlay := image.NewNRGBA(image.Rect(0, 0, display.Width, display.Height))
+	//------ add text ------//
 
-	//add a space and insert artist
-	pt.Y += textWriter.PointToFixed(float64(titleSize) * 1.5)
-	textWriter.DrawString("Eagles", pt)
+	if data.Title != "" {
+		//load the font
+		textWriter := loadFont(overlay)
+		//set the color for the overlay
+		textWriter.SetSrc(image.NewUniform(baseImage.color))
+		//set our top-left position (based on screen padding)
+		pt := freetype.Pt(display.HPad, display.VPad)
 
-	//add a space and insert album
-	pt.Y += textWriter.PointToFixed(float64(titleSize) * 1)
-	textWriter.DrawString("One Of These Nights", pt)
+		//draw the title, set the size first
+		textWriter.SetFontSize(float64(display.TitleSize))
+		//the ndraw the title
+		textWriter.DrawString(data.Title, pt)
 
-	//add a space and insert quality
-	pt.Y += textWriter.PointToFixed(float64(titleSize) * 1.5)
-	textWriter.SetSrc(image.NewUniform(lighterBase))
-	textWriter.DrawString("192kHz 24-bit", pt)
+		//set the font size for the rest of the text
+		textWriter.SetFontSize(float64(display.TextSize))
 
-	//get line width:
-	lineWidth := int(float64(disp_h) * 0.00625)
-	//draw the total progress bar
-	progress_y := int(float64(disp_h) * 0.8)
-	for y := progress_y; y < (progress_y + lineWidth); y++ {
-		for x := padd_lr; x < (disp_w - padd_lr); x++ {
-			overlay.Set(x, y, lighterBase)
+		//add a space and insert artist
+		pt.Y += textWriter.PointToFixed(float64(display.TextSize) * 1.5)
+		textWriter.DrawString(data.Artist, pt)
+
+		//add a space and insert album
+		pt.Y += textWriter.PointToFixed(float64(display.TextSize) * 1)
+		textWriter.DrawString(data.Album, pt)
+
+		//add a space and insert quality
+		pt.Y += textWriter.PointToFixed(float64(display.TextSize) * 1.5)
+		textWriter.SetSrc(image.NewUniform(baseImage.lighter))
+		textWriter.DrawString(data.SampleRate+" | "+data.BitDepth, pt)
+
+		/*
+			------ PROGRESS BAR ------
+		*/
+
+		pt.Y = textWriter.PointToFixed(float64(display.ProgressTop - int(math.Floor(float64(display.TextSize)/2.0))))
+		textWriter.SetSrc(image.NewUniform(baseImage.color))
+		textWriter.DrawString(getTimeStringMilliseconds(data.Seek)+" / "+getTimeStringMilliseconds(data.Duration*1000), pt)
+
+		//draw the underlying bar
+		for y := display.ProgressTop; y < (display.ProgressTop + display.ProgressHeight); y++ {
+			for x := display.HPad; x < (display.Width - display.HPad); x++ {
+				overlay.Set(x, y, baseImage.base)
+			}
+		}
+
+		//get the length of the progress based on play so far	for y := display.ProgressTop; y < (display.ProgressTop + display.ProgressHeight); y++ {
+		progress := float64(data.Seek/1000) / float64(data.Duration)
+		progressBar := int(float64(display.Width-(display.HPad*2)) * progress)
+		//draw the actual progress
+		for y := display.ProgressTop; y < (display.ProgressTop + display.ProgressHeight); y++ {
+			for x := display.HPad; x < progressBar; x++ {
+				overlay.Set(x, y, baseImage.color)
+			}
 		}
 	}
-	//get the length of the progress based on play so far
-	progressBar := int(float64(disp_w-padd_lr) * progress)
-	//draw the actual progress
-	for y := progress_y; y < (progress_y + lineWidth); y++ {
-		for x := padd_lr; x < progressBar; x++ {
-			overlay.Set(x, y, overlayColor)
-		}
-	}
-
-	//------ show progress ------//
 
 	//combine the albumart image and overlays
-	final := image.NewRGBA(overlay.Bounds())
-	draw.Draw(final, img.Bounds(), img, image.ZP, draw.Src)
-	//mask := image.NewUniform(color.Alpha{255})
+	final := image.NewRGBA(baseImage.image.Bounds())
+	draw.Draw(final, baseImage.image.Bounds(), baseImage.image, image.ZP, draw.Src)
 	draw.DrawMask(final, final.Bounds(), overlay, image.ZP, nil, image.ZP, draw.Over)
 
 	//------ output ------//
 
 	///write to the framebuffer
 	fb.DrawImage(0, 0, final)
-	//for now, save the image
-	//of, _ := os.Create("screen.jpg")
-	//defer of.Close()
-	//jpeg.Encode(of, final, nil)
+
+	//if this is a raspberry pi, turn on the backlight
+	if rpi == true {
+		backlight.High()
+	}
+
+	if data.Status == "play" {
+		ticking = true
+	} else {
+		ticking = false
+	}
 
 }
 
+/*
+generates the display details from the provided framebuffer
+*/
+func configureScreen(fb *framebuffer.Framebuffer) {
+	display.Width = fb.Xres
+	display.Height = fb.Yres
+
+	display.VPad = int(float64(display.Height) * 0.15625)
+	display.HPad = int(float64(display.Width) * 0.0625)
+
+	display.TitleSize = int(float64(display.Height) * .1)
+	display.TextSize = int(float64(display.Height) * .078125)
+
+	display.ProgressHeight = int(float64(display.Height) * 0.00625)
+	display.ProgressTop = int(float64(display.Height) * 0.8)
+}
+
+/*
+main thread, opens sockets, gpio (backlight control), sets up the screen and generates the triggers
+also counts seconds and turns of the screen when there's no activity
+*/
 func main() {
+	err := rpio.Open()
+	if err != nil {
+		log.Println("Can't access GPIO, assuming we're not an a RPi")
+		rpi = false
+	} else {
+		rpi = true
+		backlight = rpio.Pin(22)
+		backlight.Output()
+	}
+
 	socket, err := gosocketio.Dial(
 		gosocketio.GetUrl("192.168.68.110", 3000, false),
 		transport.GetDefaultWebsocketTransport(),
 	)
 	defer socket.Close()
-
-	type SocketData struct {
-		Data string
-	}
-
-	//drawScreen(fb)
-	socket.On("pushState", func(c *gosocketio.Channel, msg string) string {
-		log.Println("Something successfully handled")
-		fmt.Println(c)
-		fmt.Println(msg)
-		//you can return result of handler, in caller case
-		//handler will be converted from "emit" to "ack"
-		return "result"
-	})
-	socket.On(gosocketio.OnConnection, func(c *gosocketio.Channel) {
-		log.Println("Connected to server")
-		socket.Emit("getState", "")
-	})
 
 	//create the framebuffer
 	fb, err := framebuffer.NewFramebuffer("fb0")
@@ -227,10 +343,82 @@ func main() {
 	}
 	defer fb.Release()
 
-	for {
-		ia := socket.Channel.IsAlive()
-		if ia == false {
-			break
+	configureScreen(fb)
+
+	socket.On("pushState", func(c *gosocketio.Channel, msg Message) string {
+		//ignore erroneous states from volumio websocket server
+		if (msg.TrackType == "flac" && msg.BitDepth == "") || (msg.Status == "play" && msg.Seek == 0) {
+			return ""
 		}
+		if msg.Status == playing.Status && msg.Title == playing.Title && msg.Artist == playing.Artist && msg.Seek == playing.Seek {
+			return ""
+		}
+		//volumio sends lots of nonsense we want to skip past - duplicates, etc. so let's wait to help avoid a collision
+		time.Sleep(time.Duration(rand.Intn(50)) * time.Millisecond)
+		if msg == playing {
+			return ""
+		}
+		//the state has changed (hopefully...)
+		ticking = false
+		if msg.Albumart != playing.Albumart {
+			//we need to generate new art since the albumart has changed
+			buildBase(msg.Albumart)
+		}
+		log.Println(msg)
+
+		//store the new data
+		playing = msg
+		//if we've got this far and there's no baseImage (i.e., we've seen this state but the image generation isn't complete) then another thread is running
+		if baseImage.image == nil {
+			return ""
+		}
+		//draw the screen
+		drawScreen(drawOpts{Fb: fb, Message: playing})
+		//if the status is not play
+		if msg.Status != "play" {
+			screenTimeout = 60
+		} else {
+			screenTimeout = -1
+		}
+		return "result"
+	})
+	socket.On(gosocketio.OnConnection, func(c *gosocketio.Channel) {
+		log.Println("Connected to server")
+		connected = true
+		socket.Emit("getState", "")
+	})
+	socket.On(gosocketio.OnDisconnection, func(c *gosocketio.Channel) {
+		log.Println("Disconnected from server, trying to reconnect")
+		gosocketio.Redial(socket)
+		ticking = false
+		//connected = false
+	})
+
+	for {
+		if ticking == true {
+			//wait the predefined amount of time
+			playing.Seek = playing.Seek + 1000
+			drawScreen(drawOpts{Fb: fb, Message: playing})
+		}
+		//turn off the screen if we've timed out...
+		if screenTimeout >= 0 {
+			screenTimeout = screenTimeout - 1
+			if screenTimeout == 0 && rpi == true {
+				backlight.Low()
+			}
+		}
+		//log.Println(socket)
+		//if connected == false {
+		//	log.Println("Trying to reconnect...")
+
+		//	socket, err = gosocketio.Dial(
+		//		gosocketio.GetUrl("192.168.68.110", 3000, false),
+		//		transport.GetDefaultWebsocketTransport(),
+		//	)
+		//defer socket.Close()
+		//	break
+		//}
+		time.Sleep(time.Duration(1000) * time.Millisecond)
 	}
+	//select {}
 }
