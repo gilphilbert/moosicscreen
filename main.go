@@ -20,7 +20,7 @@ import (
 
 	//image transformation
 	colorconvert "github.com/gilphilbert/gocolor"   //color conversion
-	framebuffer "github.com/gilphilbert/goframebuf" //write image to fb0
+	framebuffer "github.com/gilphilbert/go-framebuffer" //write image to fb0
 	"github.com/golang/freetype"                    //import fonts
 	gosocketio "github.com/graarh/golang-socketio"  //socketio server/client (for us, the client)
 	"github.com/graarh/golang-socketio/transport"
@@ -336,7 +336,7 @@ func main() {
 	defer socket.Close()
 
 	//create the framebuffer
-	fb, err := framebuffer.NewFramebuffer("fb0")
+	fb, err := framebuffer.Open("fb0")
 	if err != nil {
 		log.Println("Can't open frambuffer, are you a member of video?")
 		os.Exit(1)
@@ -389,7 +389,7 @@ func main() {
 	})
 	socket.On(gosocketio.OnDisconnection, func(c *gosocketio.Channel) {
 		log.Println("Disconnected from server, trying to reconnect")
-		gosocketio.Redial(socket)
+		//gosocketio.Redial(socket)
 		ticking = false
 		//connected = false
 	})
