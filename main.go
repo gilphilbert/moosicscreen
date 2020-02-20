@@ -74,7 +74,7 @@ type builtImage struct {
 
 //variables (used for multiple threads)
 var (
-	fontFile      = "sen.ttf"    //the font to use
+	fontFile      = "./sen.ttf"    //the font to use
 	ticking       = false        //whether the clock is ticking (increments playback)
 	display       = screen{}     //details of the display
 	baseImage     = builtImage{} //the current background image
@@ -278,6 +278,9 @@ func drawScreen(o drawOpts) {
 	final := image.NewRGBA(baseImage.image.Bounds())
 	draw.Draw(final, baseImage.image.Bounds(), baseImage.image, image.ZP, draw.Src)
 	draw.DrawMask(final, final.Bounds(), overlay, image.ZP, nil, image.ZP, draw.Over)
+
+        // rotate the whole image by 180 degrees
+	final = imaging.Rotate180(final)
 
 	//------ output ------//
 
