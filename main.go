@@ -14,6 +14,7 @@ import (
 	"net/http" //get image from url
 	"os"       //get user
 	"time"
+	"runtime"
 
 	"github.com/cenkalti/dominantcolor" //find dominant color of image
 	"github.com/disintegration/imaging"
@@ -74,7 +75,7 @@ type builtImage struct {
 
 //variables (used for multiple threads)
 var (
-	fontFile      = "./sen.ttf"    //the font to use
+	fontFile      = "sen.ttf"    //the font to use
 	ticking       = false        //whether the clock is ticking (increments playback)
 	display       = screen{}     //details of the display
 	baseImage     = builtImage{} //the current background image
@@ -119,7 +120,10 @@ func gradientAlpha(x, y, disp_w, disp_h int) uint8 {
 }
 
 func loadFont(surface draw.Image) *freetype.Context {
-	fontBytes, err := ioutil.ReadFile(fontFile)
+	_, filename, _, ok := runtime.Caller(1)
+	filepath := path.Join(path.Dir(filename), fontFile)
+
+	fontBytes, err := ioutil.ReadFile(filepath)
 	if err != nil {
 		log.Println(err)
 		os.Exit(1)
