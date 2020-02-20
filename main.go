@@ -280,12 +280,12 @@ func drawScreen(o drawOpts) {
 	draw.DrawMask(final, final.Bounds(), overlay, image.ZP, nil, image.ZP, draw.Over)
 
         // rotate the whole image by 180 degrees
-	final = imaging.Rotate180(final)
+	finimg := imaging.Rotate180(final)
 
 	//------ output ------//
 
 	///write to the framebuffer
-	fb.DrawImage(0, 0, final)
+	fb.DrawImage(0, 0, finimg)
 
 	//if this is a raspberry pi, turn on the backlight
 	if rpi == true {
