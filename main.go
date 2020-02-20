@@ -280,7 +280,7 @@ func drawScreen(o drawOpts) {
 	draw.DrawMask(final, final.Bounds(), overlay, image.ZP, nil, image.ZP, draw.Over)
 
         // rotate the whole image by 180 degrees
-	finimg = final //:= imaging.Rotate180(final)
+	finimg := final //:= imaging.Rotate180(final)
 
 	//------ output ------//
 
