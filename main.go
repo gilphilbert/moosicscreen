@@ -144,7 +144,7 @@ needs an albumart url, sizes to the current screen (assumes horizontal)
 */
 func buildBase(aaurl string) {
 	log.Println(aaurl)
-	url := "http://192.168.68.110:3000" + aaurl
+	url := "http://localhost:3000" + aaurl
 
 	//------ load albumart ------//
 
