@@ -333,7 +333,7 @@ func main() {
 	}
 
 	socket, err := gosocketio.Dial(
-		gosocketio.GetUrl("192.168.68.110", 3000, false),
+		gosocketio.GetUrl("localhost", 3000, false),
 		transport.GetDefaultWebsocketTransport(),
 	)
 	defer socket.Close()
