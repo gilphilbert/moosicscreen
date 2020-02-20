@@ -15,6 +15,7 @@ import (
 	"os"       //get user
 	"time"
 	"runtime"
+	"path/filepath"
 
 	"github.com/cenkalti/dominantcolor" //find dominant color of image
 	"github.com/disintegration/imaging"
@@ -120,9 +121,12 @@ func gradientAlpha(x, y, disp_w, disp_h int) uint8 {
 }
 
 func loadFont(surface draw.Image) *freetype.Context {
-	_, filename, _, ok := runtime.Caller(1)
-	filepath := path.Join(path.Dir(filename), fontFile)
-
+        ex, err := os.Executable()
+        if err != nil {
+            panic(err)
+        }
+        exPath := filepath.Dir(ex)
+				
 	fontBytes, err := ioutil.ReadFile(filepath)
 	if err != nil {
 		log.Println(err)
