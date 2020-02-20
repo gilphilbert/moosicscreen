@@ -274,12 +274,12 @@ func drawScreen(o drawOpts) {
 		}
 	}
 
-	overlay = imaging.Rotate180(overlay)
+	o2 := imaging.Rotate180(overlay)
 
 	//combine the albumart image and overlays
 	final := image.NewRGBA(baseImage.image.Bounds())
 	draw.Draw(final, baseImage.image.Bounds(), baseImage.image, image.ZP, draw.Src)
-	draw.DrawMask(final, final.Bounds(), overlay, image.ZP, nil, image.ZP, draw.Over)
+	draw.DrawMask(final, final.Bounds(), o2, image.ZP, nil, image.ZP, draw.Over)
 
 	//------ output ------//
 
