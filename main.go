@@ -274,17 +274,16 @@ func drawScreen(o drawOpts) {
 		}
 	}
 
-	o2 := imaging.Rotate180(overlay)
-
 	//combine the albumart image and overlays
 	final := image.NewRGBA(baseImage.image.Bounds())
 	draw.Draw(final, baseImage.image.Bounds(), baseImage.image, image.ZP, draw.Src)
-	draw.DrawMask(final, final.Bounds(), o2, image.ZP, nil, image.ZP, draw.Over)
+	draw.DrawMask(final, final.Bounds(), overlay, image.ZP, nil, image.ZP, draw.Over)
 
 	//------ output ------//
+        finimg := imaging.Rotate180(final)
 
 	///write to the framebuffer
-	fb.DrawImage(0, 0, final)
+	fb.DrawImage(0, 0, finimg)
 
 	//if this is a raspberry pi, turn on the backlight
 	if rpi == true {
