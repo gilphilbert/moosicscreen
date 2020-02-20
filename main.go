@@ -14,7 +14,6 @@ import (
 	"net/http" //get image from url
 	"os"       //get user
 	"time"
-	"runtime"
 	"path/filepath"
 
 	"github.com/cenkalti/dominantcolor" //find dominant color of image
