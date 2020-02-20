@@ -125,8 +125,9 @@ func loadFont(surface draw.Image) *freetype.Context {
             panic(err)
         }
         exPath := filepath.Dir(ex)
-				
-	fontBytes, err := ioutil.ReadFile(filepath)
+	ff := filepath.Join(exPath, fontFile)
+
+	fontBytes, err := ioutil.ReadFile(ff)
 	if err != nil {
 		log.Println(err)
 		os.Exit(1)
