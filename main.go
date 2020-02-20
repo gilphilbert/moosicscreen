@@ -284,7 +284,7 @@ func drawScreen(o drawOpts) {
 	//------ output ------//
 
 	///write to the framebuffer
-	fb.DrawImage(0, 0, final
+	fb.DrawImage(0, 0, final)
 
 	//if this is a raspberry pi, turn on the backlight
 	if rpi == true {
